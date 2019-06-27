@@ -1,115 +1,99 @@
-import openslide
+import glob
+import math
+import os
+
 import numpy as np
+import openslide
+from skimage.filters import threshold_otsu
 
 
-class WsiSample(object):
-
-    """This class will scan the highest level of a whole slide image to identify regions with sufficient tissue
-    Args:
-        wsi_path: '/path/to/wsi.svs' [Required]
-        threshold = Value at which one considers empty space [200]
-        x_buffer = How many pixels to ignore along the x-axis [50]
-        y_buffer = How many pixels to ignore along the y-axis [50]
-        patch_buffer = How many pixels to include before the tissue is detected [5]
-        patch_size = How large of a coordinate set to return [300]
-        patch_interval = Fraction for how much the patches should overlap [0.1]
-
-
-    Usage:
-        import WsiSample
-        import openslide
-
-        wsi_path='/path/2/wsi.svs'
-        patch_size = 300
-        level = 0
-
-        obj = WsiSample(wsi_path='/path/2/wsi.svs', patch_size=patch_size)
-        OSobj = openslide.OpenSlide(wsi_path)
-
-        for x,y in obj.get_targets(): # x and y are coordinates to extract from your OpenSlide Object
-            img_patch = OSobj.read_region((x,y), level, (patch_size, patch_size))
+# -----------------------------------------------------------
+# Create function
+def get_thumbnail(img, x_level0, y_level0, patch_size, output_path):
     """
 
-    def __init__(self,
-                 wsi_path=None,
-                 patch_interval=0.1,
-                 threshold=200,
-                 x_buffer=50,
-                 y_buffer=50,
-                 patch_size=300,
-                 patch_buffer=5,
-                 level=None
-                 ):
-        self.wsi_path = wsi_path  # '/path/to/wsi.svs'
-        self.threshold = threshold  # Value at which one considers empty space
-        self.x_buffer = x_buffer  # how many pixels to ignore along the x-axis
-        self.y_buffer = y_buffer  # how many pixels to ignore along the y-axis
-        self.patch_buffer = patch_buffer  # how many pixels to include before the tissue is detected
-        self.patch_size = patch_size  # how much of a coordinate set to return
-        self.patch_interval = 1 - patch_interval  # Fraction for how much the patches should overlap
-        self.level = level  # smallest level of WSI from which to base your search on
-        if self.wsi_path is None:
-            raise RuntimeError('You must specify a WSI file path!')
+    :param img:
+    :param x_level0:
+    :param y_level0:
+    :param patch_size:
+    :param output_path:
+    :return:
+    """
+    patch = img.read_region((x_level0, y_level0), 0, (patch_size, patch_size))
+    patch = patch.convert('RGB')
+    fname = img.properties['aperio.Filename'].replace(' ', '_')
+    fname += '_' + str(x_level0)
+    fname += '_' + str(y_level0)
+    fname += '_' + '0'
+    fname += '_' + str(patch_size)
+    fname += '.jpg'
+    patch_arr = np.array(patch.convert('L'))
+    # print('Getting close: {}'.format(np.average(patch_arr)))
+    if np.average(patch_arr) < 230:
+        global num_patches
+        num_patches += 1
+        patch.save(os.path.join(output_path, fname))
 
-    def get_targets(self):
-        try:
-            wsi = openslide.OpenSlide(self.wsi_path)
-        except RuntimeError:
-            raise RuntimeError('I was unable to read your WSI file: {}'.format(self.wsi_path))
 
-        if self.level is not None:
-            self.level = wsi.level_count - 1
+def process_svs(SVS,
+                normalization_factor=1000,
+                patch_size=512,
+                buffer=10,
+                output_path='/data/biliary/patches/negative'):
+    img = openslide.OpenSlide(SVS)
 
-        x, y = wsi.level_dimensions[self.level]
-        img = wsi.read_region((0, 0), self.level, (x, y))
-        # Change to color scale
-        grey_img = img.convert('L')
-        # Convert the image into numpy array
-        np_grey = np.array(grey_img)
-        # Identify where there is tissue
-        # tuple where first element is rows, second element is columns
-        idx = np.where(np_grey < self.threshold)
-        patch_spacing = int(self.patch_size * self.patch_interval)
-        previous_x_idx = 0
+    global num_patches
+    num_patches = 0
 
-        for x_idx in range(idx[0].shape[0]):
+    # Normalize the thumbnail to the actual slide size
+    x_max, y_max = img.dimensions
+    thumbnail = img.get_thumbnail((normalization_factor, normalization_factor))
 
-            # Set the range so I stay in bounds of my slide
-            min_x = max(idx[0][x_idx] - self.patch_buffer, 0)
-            max_x = max(idx[0][x_idx] + self.patch_buffer, x)
-            x_range = range(min_x, max_x)
+    grey_thumbnail = np.array(thumbnail.convert("L"))
+    thresh = threshold_otsu(grey_thumbnail)
+    mask = np.array(grey_thumbnail) < thresh
 
-            min_y = max(idx[1][x_idx] - self.patch_buffer, 0)
-            max_y = max(idx[1][x_idx] + self.patch_buffer, 0)
-            y_range = range(min_y, max_y)
+    # how many pixels in the raw image per pixel in mask
+    x_num_orgPix_per_thumbPix = math.ceil(x_max / mask.shape[0])
+    y_num_orgPix_per_thumbPix = math.ceil(y_max / mask.shape[1])
+    # print(x_num_orgPix_per_thumbPix, y_num_orgPix_per_thumbPix)
 
-            # If I am in between my target x and y's and I'm past my last point
-            if idx[0][x_idx] in x_range and idx[1][x_idx] in y_range and idx[0][x_idx] > previous_x_idx:
-                # Extract level 0 coordinates
-                x_start = int(idx[0][x_idx] * wsi.level_downsamples[self.level])
-                y_start = int(idx[1][x_idx] * wsi.level_downsamples[self.level])
+    # Find out how many pixels in image mask to count as a patch in original
+    num_x_mask_pixels_per_rawPatch = math.ceil(patch_size / x_num_orgPix_per_thumbPix)
+    num_y_mask_pixels_per_rawPatch = math.ceil(patch_size / y_num_orgPix_per_thumbPix)
+    # print(num_x_mask_pixels_per_rawPatch, num_y_mask_pixels_per_rawPatch)
 
-                # Since the low magnification images are so much smaller, we have to loop through \
-                # to get all of the high magnification image.
-                x_end = x_start + wsi.level_downsamples[self.level] * self.patch_size
-                y_end = y_start + wsi.level_downsamples[self.level] * self.patch_size
+    mask_x, mask_y = mask.shape
+    x_mask_prev = 0
 
-                # Make a copy of original y-start so I can loop over it for all the x
-                y_start_org = y_start
+    # Iterate through the mask to identify positive pixels
+    for x in range(buffer, mask_x - buffer):
+        x_mask_window = x + num_x_mask_pixels_per_rawPatch
+        if x_mask_window <= x_mask_prev:
+            continue
+        y_mask_prev = 0
+        for y in range(buffer, mask_y - buffer):
+            y_mask_window = y + num_y_mask_pixels_per_rawPatch
+            # print('Evaluate: {} {} & {}'.format(y, y_mask_window, y_mask_prev))
+            if y_mask_window <= y_mask_prev:
+                continue
+            if y % 100 == 0:
+                print('X: {}\tY:{} of {} with total of {} so far'.format(x, y, mask.shape, num_patches), end='\r',
+                      flush=True)
+            if np.sum(mask[x:x_mask_window, y:y_mask_window]) > 0:
+                # convert mask coordinates to level0 coordinates
+                x_level0 = x * x_num_orgPix_per_thumbPix
+                y_level0 = y * y_num_orgPix_per_thumbPix
+                get_thumbnail(img, x_level0, y_level0, patch_size, output_path)
+            # print('yamsk windoe: {}'.format(y_mask_window))
+            y_mask_prev = y_mask_window
+        x_mask_prev = x_mask_window
 
-                while x_start < x_end:
-                    while y_start < y_end:
-                        yield (x_start, y_start)
-                        y_start = y_start + int(self.patch_size * self.patch_interval)
-                    x_start = x_start + int(self.patch_size * self.patch_interval)
-                    y_start = y_start_org
-                previous_x_idx = idx[0][x_idx] + patch_spacing
+    print('Printed {} from {}'.format(num_patches, SVS))
 
+
+num_patches = 0
 
 if __name__ == '__main__':
-    obj = WsiSample(wsi_path='163388.svs')
-    counter = 0
-    for i, j in obj.get_targets():
-        counter += 1
-    print('Found {} image patches'.format(counter))
-
+    for SVS in glob.glob('/data/biliary/svs/negative/*svs'):
+        process_svs(SVS)
