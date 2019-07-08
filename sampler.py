@@ -6,7 +6,7 @@ import numpy as np
 import openslide
 from skimage.filters import threshold_otsu
 
-
+#
 # -----------------------------------------------------------
 # Create function
 def get_thumbnail(img, x_level0, y_level0, patch_size, output_path):
