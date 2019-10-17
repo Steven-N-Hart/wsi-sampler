@@ -39,7 +39,7 @@ def process_svs(SVS,
                 normalization_factor=1000,
                 patch_size=512,
                 buffer=10,
-                output_path='/data/biliary/patches/negative'):
+                output_path='/projects/shart/digital_pathology/data/TCGA/test_svs/test/wsi_sampler'):
     img = openslide.OpenSlide(SVS)
 
     global num_patches
@@ -62,17 +62,21 @@ def process_svs(SVS,
     num_x_mask_pixels_per_rawPatch = math.ceil(patch_size / x_num_orgPix_per_thumbPix)
     num_y_mask_pixels_per_rawPatch = math.ceil(patch_size / y_num_orgPix_per_thumbPix)
     # print(num_x_mask_pixels_per_rawPatch, num_y_mask_pixels_per_rawPatch)
-
+    #Naresh: Adjust the buffer size to the Mask size ratio
+    buffer_x = math.ceil(buffer / x_num_orgPix_per_thumbPix)
+    buffer_y = math.ceil(buffer / y_num_orgPix_per_thumbPix)
     mask_x, mask_y = mask.shape
     x_mask_prev = 0
 
     # Iterate through the mask to identify positive pixels
-    for x in range(buffer, mask_x - buffer):
+    #Naresh:Adjusted the step size  to Mask size
+    for x in range(buffer_x, mask_x - (buffer_x), num_x_mask_pixels_per_rawPatch):
         x_mask_window = x + num_x_mask_pixels_per_rawPatch
         if x_mask_window <= x_mask_prev:
             continue
         y_mask_prev = 0
-        for y in range(buffer, mask_y - buffer):
+        # Naresh:Adjusted the step size  to Mask size
+        for y in range(buffer_y, mask_y - (buffer_y), num_y_mask_pixels_per_rawPatch):
             y_mask_window = y + num_y_mask_pixels_per_rawPatch
             # print('Evaluate: {} {} & {}'.format(y, y_mask_window, y_mask_prev))
             if y_mask_window <= y_mask_prev:
@@ -95,5 +99,5 @@ def process_svs(SVS,
 num_patches = 0
 
 if __name__ == '__main__':
-    for SVS in glob.glob('/data/biliary/svs/negative/*svs'):
+    for SVS in glob.glob('/projects/shart/digital_pathology/data/TCGA/test_svs/test/*svs'):
         process_svs(SVS)
